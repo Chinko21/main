@@ -12,6 +12,7 @@ Implementation:
 - `src/workers/proofWorker.types.ts` — shared message/state types
 - `src/workers/proofWorkerClient.ts` — main-thread client (`ProofWorkerClient`)
 - `src/hooks/useEvidence.ts` — Evidence Studio integration + Cancel button
+- `src/workers/multiBrowserWorkerSupport.ts` — multi-browser capability floor for module-worker proving
 
 ## Threat assumptions
 
@@ -60,6 +61,7 @@ worker so they cannot settle a newer request.
 |---|---|
 | `BUSY` | A proof is already running on this client; request rejected immediately without touching the worker. |
 | `INVALID_INPUT` | `videoHash` is not 64 hex characters, a secret is empty, or a secret exceeds the maximum size (256 bytes). Rejected before any worker/network activity. |
+| `UNSUPPORTED_ENVIRONMENT` | Multi-browser capability floor not met (Worker, WebAssembly, SubtleCrypto, BigInt, or ArrayBuffer missing). Rejected before secrets are transferred. |
 | `CANCELLED` | `cancel()`, `AbortSignal`, `destroy()`, or unmount aborted this request. |
 | `TIMEOUT` | Proof generation exceeded `PROOF_TIMEOUT_MS` (60s). |
 | `CRASHED` | The worker fired `onerror`/`onmessageerror` unexpectedly. |
@@ -127,3 +129,34 @@ without risk of leaking sensitive data.
   terminated worker may still resolve/reject in the mock after termination,
   surfacing as a benign "unhandled rejection" in test output. This has been
   observed not to affect real-browser behavior (verified manually).
+
+## Multi-browser worker support
+
+Browser proving is gated by the same support floor documented in
+`frontend/BROWSER_SUPPORT.md` and pinned in `frontend/browser-support.mjs`
+(Chrome 111+, Edge 111+, Firefox 114+, Safari 16.4+, iOS 16.4 best-effort).
+
+`multiBrowserWorkerSupport.ts` maps that matrix onto the proof-worker boundary:
+
+- Every matrix browser requires **module Web Workers** so witnesses never
+  execute on the UI thread as a compatibility fallback.
+- Desktop `supported` tiers are full proving surfaces; iOS/iPadOS remains
+  `best-effort` because large UltraHonk proofs can exceed mobile memory.
+- At generate-time, `ProofWorkerClient` calls `assessWorkerSupport()` and
+  rejects with `UNSUPPORTED_ENVIRONMENT` when Worker, WebAssembly,
+  SubtleCrypto, BigInt, or ArrayBuffer is missing — **before** any
+  credential/nullifier secret is transferred.
+- Assessment reasons name capability identifiers only; they never include
+  media, witnesses, seeds, or private keys.
+
+Compatibility / migration / rollback: this gate does not change Noir ACIR,
+public inputs, contracts, or stored evidence. Rollback is a revert of the
+support module + client check; no data migration is required.
+
+Focused coverage lives in:
+
+```bash
+cd frontend
+npx vitest run src/workers/multiBrowserWorkerSupport.test.ts src/workers/proofWorkerClient.test.ts
+```
+

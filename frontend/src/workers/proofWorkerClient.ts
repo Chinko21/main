@@ -4,6 +4,7 @@ import type {
   SilentWitnessProof,
   ProofErrorCode,
 } from './proofWorker.types'
+import { assessWorkerSupport } from './multiBrowserWorkerSupport'
 
 const PROOF_TIMEOUT_MS = 60_000
 const HEX64 = /^[0-9a-fA-F]{64}$/
@@ -164,6 +165,20 @@ export class ProofWorkerClient {
       return { requestId: '', result: Promise.reject(validationError) }
     }
 
+    // Fail closed before any secret crosses the worker boundary when the
+    // multi-browser capability floor is not met.
+    const support = assessWorkerSupport()
+    if (!support.ok) {
+      return {
+        requestId: '',
+        result: Promise.reject(
+          new ProofWorkerError('UNSUPPORTED_ENVIRONMENT', support.reason),
+        ),
+      }
+    }
+
+    // Reject concurrent work on the client without posting another message
+    // (matches the documented BUSY contract).
     if (this.pending.size > 0) {
       return {
         requestId: '',
